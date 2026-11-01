@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IPInfo</title>
+
+<style>
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    padding: 25px 15px;
+    background: #fff;
+    color: #111;
+    font-family: Arial, sans-serif;
+}
+
+.container {
+    max-width: 750px;
+    margin: 35px auto;
+}
+
+h1 {
+    font-size: 28px;
+    margin-bottom: 5px;
+}
+
+.subtitle {
+    color: #777;
+    font-size: 14px;
+}
+
+hr {
+    border: 0;
+    border-top: 1px solid #ddd;
+    margin: 25px 0;
+}
+
+button, input {
+    width: 100%;
+    padding: 13px;
+    margin: 7px 0;
+    border: 1px solid #ccc;
+    background: white;
+    color: #111;
+    font-size: 14px;
+    border-radius: 5px;
+}
+
+button {
+    cursor: pointer;
+}
+
+button:hover {
+    background: #eee;
+}
+
+input:focus {
+    outline: 1px solid #555;
+}
+
+#status {
+    margin-top: 15px;
+    font-size: 14px;
+    color: #666;
+}
+
+#results, #metadata {
+    display: none;
+    margin-top: 25px;
+}
+
+.result-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 15px;
+    padding: 11px 0;
+    border-bottom: 1px solid #eee;
+    font-size: 14px;
+}
+
+.result-row span:last-child {
+    text-align: right;
+    overflow-wrap: anywhere;
+}
+
+.coordinates {
+    margin: 20px 0;
+    padding: 15px;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+}
+
+.coordinates p {
+    font-size: 14px;
+    overflow-wrap: anywhere;
+}
+
+pre {
+    background: #f5f5f5;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    padding: 15px;
+    overflow-x: auto;
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre;
+}
+
+a {
+    color: #111;
+}
+
+footer {
+    margin-top: 35px;
+    padding-top: 15px;
+    border-top: 1px solid #ddd;
+    color: #777;
+    font-size: 13px;
+}
+</style>
+</head>
+
+<body>
+
+<div class="container">
+
+    <h1>IPInfo</h1>
+    <div class="subtitle">IP Information & Metadata Inspector</div>
+
+    <hr>
+
+    <button onclick="getOriginalIP()">01. My Original IP</button>
+
+    <input
+        type="text"
+        id="ipInput"
+        placeholder="Enter an IP address"
+    >
+
+    <button onclick="trackIP()">02. Track an IP</button>
+
+    <button onclick="inspectMetadata()">03. Metadata Inspector</button>
+
+    <button onclick="getTorIP()">04. My Tor IP</button>
+
+    <button onclick="clearResults()">00. Clear</button>
+
+    <div id="status"></div>
+
+    <div id="results">
+
+        <h3 id="resultTitle">IP Information</h3>
+
+        <div id="resultData"></div>
+
+        <div class="coordinates">
+            <h3>Geographic Coordinates</h3>
+
+            <p id="latitude">Latitude: N/A</p>
+            <p id="longitude">Longitude: N/A</p>
+            <p id="latlong">Coordinates: N/A</p>
+
+            <button onclick="copyCoordinates()">
+                Copy Coordinates
+            </button>
+
+            <a id="mapLink" target="_blank" rel="noopener noreferrer">
+                Open Google Maps
+            </a>
+        </div>
+
+        <button onclick="showMetadata()">
+            View Complete Metadata
+        </button>
+
+    </div>
+
+    <div id="metadata">
+
+        <h3>Metadata Inspector</h3>
+
+        <p>Complete JSON response structure</p>
+
+        <button onclick="copyMetadata()">
+            Copy Raw JSON
+        </button>
+
+        <button onclick="toggleJSON()">
+            Expand / Collapse JSON
+        </button>
+
+        <pre id="jsonOutput"></pre>
+
+    </div>
+
+    <footer>
+        Developer: rabix$
+    </footer>
+
+</div>
+
+<script>
+
+let currentData = null;
+let metadataExpanded = true;
+
+async function fetchIP(url, title) {
+
+    const status = document.getElementById("status");
+
+    status.textContent = "Fetching information...";
+
+    document.getElementById("results").style.display = "none";
+    document.getElementById("metadata").style.display = "none";
+
+    try {
+
+        const response = await fetch(url);
+
+        if (!response.ok) {
+            throw new Error("API request failed: " + response.status);
+        }
+
+        const data = await response.json();
+
+        if (!data || typeof data !== "object" || Array.isArray(data)) {
+            throw new Error("Invalid API response.");
+        }
+
+        if (data.error || !data.ip) {
+            throw new Error(data.reason || "Unable to retrieve IP information.");
+        }
+
+        currentData = data;
+
+        displayResults(data, title);
+
+        status.textContent = "Information retrieved successfully.";
+
+    } catch (error) {
+
+        status.textContent = error.message;
+
+    }
+
+}
+
+function getOriginalIP() {
+
+    fetchIP(
+        "https://ipapi.co/json/",
+        "Your Original IP"
+    );
+
+}
+
+function trackIP() {
+
+    const ip = document.getElementById("ipInput").value.trim();
+
+    if (!isValidIP(ip)) {
+        document.getElementById("status").textContent =
+            "Enter a valid IPv4 or IPv6 address.";
+        return;
+    }
+
+    fetchIP(
+        "https://ipapi.co/" + encodeURIComponent(ip) + "/json/",
+        "IP Lookup Results"
+    );
+
+}
+
+function isValidIP(ip) {
+
+    const ipv4 =
+        /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
+
+    const ipv6 =
+        /^[0-9a-fA-F:]+$/;
+
+    return ipv4.test(ip) ||
+        (ipv6.test(ip) && ip.includes(":"));
+
+}
+
+function getTorIP() {
+
+    document.getElementById("status").textContent =
+        "Tor lookup requires a separately configured Tor backend. This static website cannot route requests through your local Tor service.";
+
+}
+
+function displayResults(data, title) {
+
+    document.getElementById("resultTitle").textContent = title;
+
+    const resultData = document.getElementById("resultData");
+
+    resultData.replaceChildren();
+
+    const fields = {
+
+        "IP Address": data.ip,
+        "City": data.city,
+        "Region": data.region,
+        "Country": data.country_name,
+        "Country Code": data.country,
+        "Region Code": data.region_code,
+        "Continent": data.continent_code,
+        "Postal Code": data.postal,
+        "Languages": data.languages,
+        "Calling Code": data.country_calling_code,
+        "Timezone": data.timezone,
+        "UTC Offset": data.utc_offset,
+        "ASN": data.asn,
+        "ISP / Organization": data.org,
+        "Currency": data.currency,
+        "Currency Name": data.currency_name,
+        "Country Capital": data.country_capital,
+        "Country TLD": data.country_tld,
+        "Country Area": data.country_area,
+        "Country Population": data.country_population,
+        "EU Membership": data.in_eu
+
+    };
+
+    for (const [label, value] of Object.entries(fields)) {
+
+        const row = document.createElement("div");
+        row.className = "result-row";
+
+        const name = document.createElement("span");
+        name.textContent = label;
+
+        const result = document.createElement("span");
+        result.textContent =
+            value === null || value === undefined ? "N/A" : String(value);
+
+        row.append(name, result);
+
+        resultData.appendChild(row);
+
+    }
+
+    const lat = data.latitude;
+    const lon = data.longitude;
+
+    document.getElementById("latitude").textContent =
+        "Latitude: " + (lat ?? "N/A");
+
+    document.getElementById("longitude").textContent =
+        "Longitude: " + (lon ?? "N/A");
+
+    document.getElementById("latlong").textContent =
+        "Coordinates: " + (lat ?? "N/A") + ", " + (lon ?? "N/A");
+
+    const validCoordinates =
+        typeof lat === "number" &&
+        typeof lon === "number" &&
+        Number.isFinite(lat) &&
+        Number.isFinite(lon) &&
+        lat >= -90 && lat <= 90 &&
+        lon >= -180 && lon <= 180;
+
+    const mapLink = document.getElementById("mapLink");
+
+    if (validCoordinates) {
+
+        mapLink.href =
+            "https://maps.google.com/?q=" +
+            encodeURIComponent(lat + "," + lon);
+
+        mapLink.style.display = "inline";
+
+    } else {
+
+        mapLink.removeAttribute("href");
+        mapLink.style.display = "none";
+
+    }
+
+    document.getElementById("results").style.display = "block";
+
+}
+
+function inspectMetadata() {
+
+    const ip = document.getElementById("ipInput").value.trim();
+
+    if (ip && !isValidIP(ip)) {
+        document.getElementById("status").textContent =
+            "Enter a valid IPv4 or IPv6 address.";
+        return;
+    }
+
+    const url = ip
+        ? "https://ipapi.co/" + encodeURIComponent(ip) + "/json/"
+        : "https://ipapi.co/json/";
+
+    fetchIP(url, "Metadata Inspection");
+
+}
+
+function showMetadata() {
+
+    if (!currentData) return;
+
+    document.getElementById("metadata").style.display = "block";
+
+    document.getElementById("jsonOutput").textContent =
+        JSON.stringify(currentData, null, 4);
+
+    metadataExpanded = true;
+
+}
+
+function toggleJSON() {
+
+    const output = document.getElementById("jsonOutput");
+
+    if (!currentData) return;
+
+    metadataExpanded = !metadataExpanded;
+
+    output.textContent = metadataExpanded
+        ? JSON.stringify(currentData, null, 4)
+        : JSON.stringify(currentData);
+
+}
+
+async function copyMetadata() {
+
+    if (!currentData) return;
+
+    await navigator.clipboard.writeText(
+        JSON.stringify(currentData, null, 4)
+    );
+
+    document.getElementById("status").textContent =
+        "Metadata copied.";
+
+}
+
+async function copyCoordinates() {
+
+    if (!currentData ||
+        typeof currentData.latitude !== "number" ||
+        typeof currentData.longitude !== "number") {
+
+        document.getElementById("status").textContent =
+            "Coordinates unavailable.";
+
+        return;
+    }
+
+    const coordinates =
+        currentData.latitude + ", " + currentData.longitude;
+
+    await navigator.clipboard.writeText(coordinates);
+
+    document.getElementById("status").textContent =
+        "Coordinates copied.";
+
+}
+
+function clearResults() {
+
+    currentData = null;
+
+    document.getElementById("results").style.display = "none";
+    document.getElementById("metadata").style.display = "none";
+    document.getElementById("status").textContent = "";
+    document.getElementById("ipInput").value = "";
+
+}
+
+</script>
+
+</body>
+</html>
