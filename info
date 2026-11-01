@@ -1,0 +1,171 @@
+#!/bin/bash
+
+TOR_SERVICE="tor"
+
+if systemctl list-unit-files | grep -q "^tor@default.service"; then
+    TOR_SERVICE="tor@default"
+elif systemctl list-unit-files | grep -q "^tor.service"; then
+    TOR_SERVICE="tor"
+elif systemctl list-units --type=service | grep -q "^tor@default.service"; then
+    TOR_SERVICE="tor@default"
+elif systemctl list-units --type=service | grep -q "^tor.service"; then
+    TOR_SERVICE="tor"
+fi
+
+check_sudo() {
+    if [ "$EUID" -ne 0 ]; then
+        echo "Please run this tool as root or with sudo."
+        exit 1
+    fi
+}
+
+exits() {
+    systemctl stop "$TOR_SERVICE"
+    exit 0
+}
+
+check_dependencies() {
+    echo "Checking dependencies..."
+
+    dependencies=(tor torsocks curl jq)
+
+    for dep in "${dependencies[@]}"; do
+        if ! command -v "$dep" &>/dev/null; then
+            echo "$dep is missing. Installing..."
+
+            if command -v apt &>/dev/null; then
+                apt update && apt install -y "$dep"
+            elif command -v dnf &>/dev/null; then
+                dnf install -y "$dep"
+            elif command -v yum &>/dev/null; then
+                yum install -y "$dep"
+            elif command -v pacman &>/dev/null; then
+                pacman -S --noconfirm "$dep"
+            else
+                echo "Unsupported package manager."
+                exit 1
+            fi
+        else
+            echo "$dep is already installed."
+        fi
+    done
+
+    if ! systemctl is-active --quiet "$TOR_SERVICE"; then
+        echo "Starting Tor..."
+        systemctl start "$TOR_SERVICE"
+    else
+        echo "Tor is already running."
+    fi
+}
+
+change_tor_ip() {
+    echo
+    echo "Changing Tor identity..."
+    systemctl reload "$TOR_SERVICE"
+    sleep 2
+}
+
+tor_request() {
+    torsocks curl -fsS "$1"
+}
+
+direct_request() {
+    curl -fsS "$1"
+}
+
+banner() {
+    clear
+    echo "IP Information Tool"
+    echo "Developer: rabix$"
+}
+
+menu() {
+    echo
+    echo "[01] My Original IP"
+    echo "[02] My Tor IP"
+    echo "[03] Track an IP"
+    echo "[00] Exit"
+    echo
+
+    read -rp "Select an option: " option
+
+    case "$option" in
+        1|01) my_original_ip ;;
+        2|02) my_tor_ip ;;
+        3|03) track_ip ;;
+        0|00) exits ;;
+        *)
+            echo "Invalid option."
+            sleep 1
+            menu
+            ;;
+    esac
+}
+
+my_original_ip() {
+    ip_data=$(direct_request "https://ipapi.co/json")
+    parse_ip_data "$ip_data" "Your Original IP"
+}
+
+my_tor_ip() {
+    change_tor_ip
+    ip_data=$(tor_request "https://ipapi.co/json")
+    parse_ip_data "$ip_data" "Your Tor IP"
+}
+
+track_ip() {
+    read -rp "Enter an IP address: " user_ip
+
+    change_tor_ip
+    ip_data=$(tor_request "https://ipapi.co/$user_ip/json")
+    parse_ip_data "$ip_data" "Details for IP $user_ip"
+}
+
+parse_ip_data() {
+    local ip_data="$1"
+    local title="$2"
+
+    local_ip=$(echo "$ip_data" | jq -r '.ip // "N/A"')
+    city=$(echo "$ip_data" | jq -r '.city // "N/A"')
+    region=$(echo "$ip_data" | jq -r '.region // "N/A"')
+    country=$(echo "$ip_data" | jq -r '.country_name // "N/A"')
+    country_code=$(echo "$ip_data" | jq -r '.country // "N/A"')
+    region_code=$(echo "$ip_data" | jq -r '.region_code // "N/A"')
+    languages=$(echo "$ip_data" | jq -r '.languages // "N/A"')
+    calling_code=$(echo "$ip_data" | jq -r '.country_calling_code // "N/A"')
+    timezone=$(echo "$ip_data" | jq -r '.timezone // "N/A"')
+    postal=$(echo "$ip_data" | jq -r '.postal // "N/A"')
+    asn=$(echo "$ip_data" | jq -r '.asn // "N/A"')
+    isp=$(echo "$ip_data" | jq -r '.org // "N/A"')
+    lat=$(echo "$ip_data" | jq -r '.latitude // "N/A"')
+    lon=$(echo "$ip_data" | jq -r '.longitude // "N/A"')
+    currency=$(echo "$ip_data" | jq -r '.currency // "N/A"')
+
+    echo
+    echo "$title:"
+    echo "IP Address   : $local_ip"
+    echo "City         : $city"
+    echo "Region       : $region"
+    echo "Country      : $country"
+    echo "Country Code : $country_code"
+    echo "Region Code  : $region_code"
+    echo "Languages    : $languages"
+    echo "Calling Code : $calling_code"
+    echo "Timezone     : $timezone"
+    echo "Postal Code  : $postal"
+    echo "ASN          : $asn"
+    echo "ISP          : $isp"
+    echo "Latitude     : $lat"
+    echo "Longitude    : $lon"
+    echo "Currency     : $currency"
+    echo "Google Maps  : https://maps.google.com/?q=$lat,$lon"
+
+    echo
+    read -rp "Press Enter to return to the main menu..."
+    menu
+}
+
+check_sudo
+check_dependencies
+banner
+menu
