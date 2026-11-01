@@ -6,15 +6,11 @@ if systemctl list-unit-files | grep -q "^tor@default.service"; then
     TOR_SERVICE="tor@default"
 elif systemctl list-unit-files | grep -q "^tor.service"; then
     TOR_SERVICE="tor"
-elif systemctl list-units --type=service | grep -q "^tor@default.service"; then
-    TOR_SERVICE="tor@default"
-elif systemctl list-units --type=service | grep -q "^tor.service"; then
-    TOR_SERVICE="tor"
 fi
 
 check_sudo() {
     if [ "$EUID" -ne 0 ]; then
-        echo "Please run this tool as root or with sudo."
+        echo "Run as root or with sudo."
         exit 1
     fi
 }
@@ -25,13 +21,11 @@ exits() {
 }
 
 check_dependencies() {
-    echo "Checking dependencies..."
-
     dependencies=(tor torsocks curl jq)
 
     for dep in "${dependencies[@]}"; do
         if ! command -v "$dep" &>/dev/null; then
-            echo "$dep is missing. Installing..."
+            echo "Installing $dep..."
 
             if command -v apt &>/dev/null; then
                 apt update && apt install -y "$dep"
@@ -45,45 +39,41 @@ check_dependencies() {
                 echo "Unsupported package manager."
                 exit 1
             fi
-        else
-            echo "$dep is already installed."
+
+            command -v "$dep" &>/dev/null || exit 1
         fi
     done
 
     if ! systemctl is-active --quiet "$TOR_SERVICE"; then
-        echo "Starting Tor..."
-        systemctl start "$TOR_SERVICE"
-    else
-        echo "Tor is already running."
+        systemctl start "$TOR_SERVICE" || exit 1
     fi
 }
 
 change_tor_ip() {
-    echo
-    echo "Changing Tor identity..."
-    systemctl reload "$TOR_SERVICE"
+    systemctl reload "$TOR_SERVICE" || return 1
     sleep 2
 }
 
 tor_request() {
-    torsocks curl -fsS "$1"
+    torsocks curl -fsS --max-time 20 "$1"
 }
 
 direct_request() {
-    curl -fsS "$1"
+    curl -fsS --max-time 20 "$1"
 }
 
 banner() {
     clear
-    echo "IP Information Tool"
+    echo "IPInfo"
     echo "Developer: rabix$"
+    echo
 }
 
 menu() {
-    echo
     echo "[01] My Original IP"
     echo "[02] My Tor IP"
     echo "[03] Track an IP"
+    echo "[04] Metadata Inspector"
     echo "[00] Exit"
     echo
 
@@ -93,6 +83,7 @@ menu() {
         1|01) my_original_ip ;;
         2|02) my_tor_ip ;;
         3|03) track_ip ;;
+        4|04) metadata_inspector ;;
         0|00) exits ;;
         *)
             echo "Invalid option."
@@ -103,27 +94,116 @@ menu() {
 }
 
 my_original_ip() {
-    ip_data=$(direct_request "https://ipapi.co/json")
+    local ip_data
+
+    ip_data=$(direct_request "https://ipapi.co/json/") || {
+        echo "Request failed."
+        read -rp "Press Enter to continue..."
+        menu
+        return
+    }
+
     parse_ip_data "$ip_data" "Your Original IP"
 }
 
 my_tor_ip() {
-    change_tor_ip
-    ip_data=$(tor_request "https://ipapi.co/json")
+    change_tor_ip || {
+        echo "Tor reload failed."
+        read -rp "Press Enter to continue..."
+        menu
+        return
+    }
+
+    local ip_data
+    ip_data=$(tor_request "https://ipapi.co/json/") || {
+        echo "Request failed."
+        read -rp "Press Enter to continue..."
+        menu
+        return
+    }
+
     parse_ip_data "$ip_data" "Your Tor IP"
 }
 
 track_ip() {
+    local user_ip
+    local ip_data
+
     read -rp "Enter an IP address: " user_ip
 
-    change_tor_ip
-    ip_data=$(tor_request "https://ipapi.co/$user_ip/json")
-    parse_ip_data "$ip_data" "Details for IP $user_ip"
+    if [[ ! "$user_ip" =~ ^[0-9a-fA-F:.]+$ ]]; then
+        echo "Invalid IP address."
+        read -rp "Press Enter to continue..."
+        menu
+        return
+    fi
+
+    change_tor_ip || return
+
+    ip_data=$(tor_request "https://ipapi.co/${user_ip}/json/") || {
+        echo "Request failed."
+        read -rp "Press Enter to continue..."
+        menu
+        return
+    }
+
+    parse_ip_data "$ip_data" "IP Lookup Results"
+}
+
+metadata_inspector() {
+    local user_ip
+    local ip_data
+
+    read -rp "Enter an IP address (leave empty for your IP): " user_ip
+
+    if [[ -n "$user_ip" && ! "$user_ip" =~ ^[0-9a-fA-F:.]+$ ]]; then
+        echo "Invalid IP address."
+        read -rp "Press Enter to continue..."
+        menu
+        return
+    fi
+
+    if [[ -n "$user_ip" ]]; then
+        ip_data=$(direct_request "https://ipapi.co/${user_ip}/json/")
+    else
+        ip_data=$(direct_request "https://ipapi.co/json/")
+    fi
+
+    if [ $? -ne 0 ] || [ -z "$ip_data" ]; then
+        echo "Request failed."
+        read -rp "Press Enter to continue..."
+        menu
+        return
+    fi
+
+    if ! echo "$ip_data" | jq -e 'type == "object" and (.error != true)' >/dev/null; then
+        echo "Invalid IP or unavailable metadata."
+        read -rp "Press Enter to continue..."
+        menu
+        return
+    fi
+
+    clear
+    echo "IPInfo - Metadata Inspector"
+    echo "Developer: rabix$"
+    echo
+    echo "$ip_data" | jq .
+
+    echo
+    read -rp "Press Enter to return to the main menu..."
+    menu
 }
 
 parse_ip_data() {
     local ip_data="$1"
     local title="$2"
+
+    if ! echo "$ip_data" | jq -e 'type == "object" and (.error != true)' >/dev/null; then
+        echo "Invalid IP or unavailable information."
+        read -rp "Press Enter to continue..."
+        menu
+        return
+    fi
 
     local_ip=$(echo "$ip_data" | jq -r '.ip // "N/A"')
     city=$(echo "$ip_data" | jq -r '.city // "N/A"')
@@ -142,7 +222,7 @@ parse_ip_data() {
     currency=$(echo "$ip_data" | jq -r '.currency // "N/A"')
 
     echo
-    echo "$title:"
+    echo "$title"
     echo "IP Address   : $local_ip"
     echo "City         : $city"
     echo "Region       : $region"
@@ -157,12 +237,27 @@ parse_ip_data() {
     echo "ISP          : $isp"
     echo "Latitude     : $lat"
     echo "Longitude    : $lon"
+    echo "Coordinates  : $lat, $lon"
     echo "Currency     : $currency"
     echo "Google Maps  : https://maps.google.com/?q=$lat,$lon"
 
     echo
-    read -rp "Press Enter to return to the main menu..."
-    menu
+    echo "[01] View complete metadata"
+    echo "[00] Return to menu"
+
+    read -rp "Select an option: " choice
+
+    case "$choice" in
+        1|01)
+            echo
+            echo "$ip_data" | jq .
+            read -rp "Press Enter to continue..."
+            menu
+            ;;
+        *)
+            menu
+            ;;
+    esac
 }
 
 check_sudo
